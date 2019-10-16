@@ -7,6 +7,7 @@ import android.content.IntentFilter;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.os.BatteryManager;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -57,8 +58,11 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
     private Base robotBase;
     private Head robotHead;
     private Sensor robotSensor;
+    private int batteryLevel;
 
     private LocationManager locationManager;
+
+    private BroadcastReceiver batteryLevelReceiver;
 
     private void populateBase(JsonObject telemetry)
     {
@@ -284,6 +288,24 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
         catch (Exception e) {
             Log.e(TAG, "Exception locating", e);
         }
+
+        Telemetry that = this;
+
+        batteryLevelReceiver = new BroadcastReceiver() {
+            public void onReceive(Context context, Intent intent) {
+                context.unregisterReceiver(this);
+                int rawlevel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+                int level = -1;
+                if (rawlevel >= 0 && scale > 0) {
+                    level = (rawlevel * 100) / scale;
+                }
+                that.batteryLevel = level;
+            }
+        };
+
+        IntentFilter batteryLevelFilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+        context.getApplicationContext().registerReceiver(batteryLevelReceiver, batteryLevelFilter);
     }
 
     public void unregisterEvents(Context context) {
@@ -370,6 +392,17 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
 
             envelope = new JsonObject();
             envelope.addProperty("source", "/loomo/sensors");
+            envelope.add("payload", payload);
+
+            results.add(envelope.toString());
+
+            payload = new JsonObject();
+            //payload.addProperty("cpu", robot.getCPURate());
+            payload.addProperty("memory", robot.getMemoryPercent());
+            payload.addProperty("battery", batteryLevel);
+
+            envelope = new JsonObject();
+            envelope.addProperty("source", "/loomo/system");
             envelope.add("payload", payload);
 
             results.add(envelope.toString());
@@ -475,6 +508,5 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
     @Override
     public void onProviderDisabled(String s) {
         Log.d(TAG, String.format("onProviderDisabled s=%s threadId=%d", s, Thread.currentThread().getId()));
-
     }
 }

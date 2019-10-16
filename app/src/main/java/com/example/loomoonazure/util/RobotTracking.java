@@ -93,7 +93,7 @@ public class RobotTracking extends TimerTask implements HeadPIDController.HeadCo
             headPIDController.setHeadFollowFactor(1.0f);
 
             startTime = System.currentTimeMillis();
-            dts.startDetectingPerson(this);
+            // dts.startDetectingPerson(this);
 
             if (monitor == null) {
                 monitor = new Timer();

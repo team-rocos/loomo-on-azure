@@ -2,8 +2,14 @@ package com.example.loomoonazure;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
+import android.Manifest;
+import android.app.ActivityManager;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.location.Location;
 import android.os.Bundle;
 import android.os.Handler;
@@ -12,6 +18,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.TextView;
 
 import com.example.loomoonazure.util.AzureIoT;
 import com.example.loomoonazure.util.MessageFromBindState;
@@ -32,9 +39,14 @@ import com.segway.robot.sdk.locomotion.head.Head;
 import com.segway.robot.sdk.locomotion.sbv.Base;
 import com.segway.robot.sdk.perception.sensor.Sensor;
 import com.segway.robot.sdk.vision.Vision;
+import com.segway.robot.sdk.vision.frame.Frame;
+import com.segway.robot.sdk.vision.stream.StreamType;
 import com.segway.robot.sdk.voice.Recognizer;
 import com.segway.robot.sdk.voice.Speaker;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.LinkedList;
 
 public class MainActivity
@@ -46,6 +58,9 @@ public class MainActivity
     private boolean isBindBase = false;
     private static final int SERVICE_BIND_BASE = 1;
     private static final int SERVICE_UNBIND_BASE = 2;
+
+    private static final String rocosAddress = "40.125.67.251";
+    private static final int rocosPort = 9000;
 
     private Head robotHead;
     private boolean isBindHead = false;
@@ -80,7 +95,7 @@ public class MainActivity
     private AzureIoT connection;
     private TeleOps teleops;
     private boolean isIoTCentral = true;
-    private final String connString = "[device connection string]";
+    private final String connString = "rocos-iot-hub-jing-dev.azure-devices.net";
     private static final int CONNECTION_OPEN = 15;
     private static final int CONNECTION_CLOSED = 16;
     private boolean isConnected = false;
@@ -149,10 +164,11 @@ public class MainActivity
         telemetry = new Telemetry(this);
         telemetry.registerEvents(this);
 
-        connection = new AzureIoT(handler, CONNECTION_OPEN, CONNECTION_CLOSED, this);
-        connection.connect(connString, isIoTCentral);
+        //connection = new AzureIoT(handler, CONNECTION_OPEN, CONNECTION_CLOSED, this);
+        //connection.connect(connString, isIoTCentral);
 
-        teleops = new TeleOps(this, telemetry);
+        teleops = new TeleOps(handler, CONNECTION_OPEN, CONNECTION_CLOSED,this, telemetry);
+        teleops.start(rocosAddress, rocosPort, cadence );
     }
 
     @Override
@@ -203,6 +219,7 @@ public class MainActivity
     private void initRobot() {
         Log.d(TAG, String.format("initRobot threadId=%d", Thread.currentThread().getId()));
 
+
         if (currentAction == null) {
             if (isBindBase && isBindHead && isBindRecognizer && isBindSensor && isBindSpeaker && isBindVision) {
                 robotEmoji.init(this);
@@ -211,8 +228,23 @@ public class MainActivity
                 robotEmoji.setHeadControlHandler(this);
 
                 robotConversation.start();
-                RobotAction ra = RobotAction.getTrack(Robot.TRACK_BEHAVIOR_WATCH);
-                actionDo(ra);
+                //RobotAction ra = RobotAction.getTrack(Robot.TRACK_BEHAVIOR_WATCH);
+                //actionDo(ra);
+            }
+
+            if(isBindVision) {
+
+                Vision mVision = Vision.getInstance();
+                //mVision.bindService(this, mBindStateListener);
+
+                Bitmap mBitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+
+                mVision.startListenFrame(StreamType.DEPTH, new Vision.FrameListener() {
+                    @Override
+                    public void onNewFrame(int streamType, Frame frame) {
+                        mBitmap.copyPixelsFromBuffer(frame.getByteBuffer());
+                    }
+                });
             }
         }
 
@@ -222,10 +254,13 @@ public class MainActivity
             } else {
                 timeout = cadence * 1000;
                 handler.sendEmptyMessageDelayed(ACTION_SEND_TELEMETRY, timeout);
-                actionSay("All systems operational.");
+                actionSay("All systems operational. I am Jing");
             }
         }
     }
+
+
+
 
     // Handler.Callback
     @Override
@@ -296,7 +331,7 @@ public class MainActivity
                 Log.d(TAG, String.format("handleMessage what=STATE_CHANGED threadId=%d", tid));
                 if (isBindBase && isBindHead && isBindSensor && isConnected) {
                     Log.d(TAG, "Sending State");
-                    connection.sendMessage(telemetry.getState());
+                    // connection.sendMessage(telemetry.getState());
                     messages += 1;
                 }
                 break;
@@ -304,7 +339,8 @@ public class MainActivity
                 Log.d(TAG, String.format("handleMessage what=LOCATION_CHANGED threadId=%d", tid));
                 if (isBindBase && isBindHead && isBindSensor && isConnected) {
                     Log.d(TAG, "Sending Location");
-                    connection.sendMessage(telemetry.getLocation());
+
+                    // connection.sendMessage(telemetry.getLocation());
                     messages += 1;
                 }
                 break;
@@ -323,7 +359,9 @@ public class MainActivity
                 Log.d(TAG, String.format("handleMessage what=ACTION_SEND_TELEMETRY threadId=%d", tid));
                 if (timeout > 0) {
                     if (isBindBase && isBindHead && isBindSensor && isConnected) {
-                        connection.sendMessage(telemetry.getMessage());
+
+                        // Disable the IoT hub sending message function for now
+                        // connection.sendMessage(telemetry.getMessage());
                         messages += 1;
                     }
                     handler.sendEmptyMessageDelayed(ACTION_SEND_TELEMETRY, timeout);
@@ -578,7 +616,7 @@ public class MainActivity
 
     @Override
     public synchronized void setState(String state) {
-        Log.d(TAG, String.format("establishSocketConnection threadId=%d", Thread.currentThread().getId()));
+        Log.d(TAG, String.format("setState threadId=%d", Thread.currentThread().getId()));
 
         this.lastState = state;
         handler.sendEmptyMessage(ACTION_SEND_STATE);
@@ -626,6 +664,56 @@ public class MainActivity
     public synchronized void setDebug(boolean debug) {
         Log.d(TAG, String.format("setDebug threadId=%d", Thread.currentThread().getId()));
         this.debug = debug;
+    }
+
+    @Override
+    public synchronized double getMemoryPercent()
+    {
+        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+        ActivityManager activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        activityManager.getMemoryInfo(mi);
+
+        //Percentage can be calculated for API 16+
+        double percentAvail = mi.availMem / (double)mi.totalMem * 100.0;
+
+        return percentAvail;
+    }
+
+    @Override
+    // TODO: turn this into more efficient algorithm
+    public synchronized int getCPURate()
+    {
+        StringBuilder tv = new StringBuilder();
+        int rate = 0;
+
+        try {
+            String Result;
+            Process p;
+            p = Runtime.getRuntime().exec("top -n 1");
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            while ((Result = br.readLine()) != null) {
+                if (Result.trim().length() < 1) {
+                    continue;
+                } else {
+                    String[] CPUusr = Result.split("%");
+                    tv.append("USER:" + CPUusr[0] + "\n");
+                    String[] CPUusage = CPUusr[0].split("User");
+                    String[] SYSusage = CPUusr[1].split("System");
+                    tv.append("CPU:" + CPUusage[1].trim() + " length:" + CPUusage[1].trim().length() + "\n");
+                    tv.append("SYS:" + SYSusage[1].trim() + " length:" + SYSusage[1].trim().length() + "\n");
+
+                    rate = Integer.parseInt(CPUusage[1].trim()) + Integer.parseInt(SYSusage[1].trim());
+                    break;
+                }
+            }
+
+        } catch (IOException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+        return rate;
     }
 
     @Override
@@ -678,6 +766,11 @@ public class MainActivity
         }
 
         currentAction = nextAction;
+
+        if(currentAction == null)
+        {
+            return;
+        }
 
         float arg1, arg2;
         Message msg;

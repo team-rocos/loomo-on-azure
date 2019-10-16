@@ -57,6 +57,9 @@ public interface Robot {
     boolean getDebug();
     void setDebug(boolean debug);
 
+    double getMemoryPercent();
+    int getCPURate();
+
     // higher order functions
     void actionSay(String phrase);
     void actionDo(RobotAction action);

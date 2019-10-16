@@ -13,6 +13,7 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Timer;
 import java.util.TimerTask;
+import android.os.Handler;
 
 public class TeleOps {
     private static final String TAG = "TeleOps";
@@ -21,16 +22,29 @@ public class TeleOps {
     private Telemetry telemetry;
 
     private Socket socket;
-    private Timer telemetryTimer;
-    private TimerTask telemetryTask;
+
+    private Timer telemetryLowFreqTimer;
+    private TimerTask telemetryLowFreqTask;
+
+    private Timer telemetryHighFreqTimer;
+    private TimerTask telemetryHighFreqTask;
+
+
     private OutputStream out;
     private InputStream in;
+    private Handler handler;
+    private int CONNECTION_OPEN;
+    private int CONNECTION_CLOSED;
+
 
     Thread operationsThread;
-    byte[] operationBuffer = new byte[4096];
+    byte[] operationBuffer = new byte[1024];
     boolean stopped = false;
 
-    public TeleOps(Robot robot, Telemetry telemetry) {
+    public TeleOps(Handler handler, int CONNECTION_OPEN, int CONNECTION_CLOSED, Robot robot, Telemetry telemetry) {
+        this.handler = handler;
+        this.CONNECTION_OPEN = CONNECTION_OPEN;
+        this.CONNECTION_CLOSED = CONNECTION_CLOSED;
         this.robot = robot;
         this.telemetry = telemetry;
     }
@@ -49,12 +63,15 @@ public class TeleOps {
 
                     that.out = that.socket.getOutputStream();
                     that.in  = that.socket.getInputStream();
+                    that.handler.sendEmptyMessage(that.CONNECTION_OPEN);
                 } catch(Exception e) {
                     Log.e(TAG, "Exception connecting", e);
                 }
 
-                that.telemetryTimer = new Timer();
-                that.telemetryTask = new TimerTask() {
+                int lowCadence = cadence * 10;
+
+                that.telemetryHighFreqTimer = new Timer();
+                that.telemetryHighFreqTask = new TimerTask() {
                     @Override
                     public void run() {
                         Log.d(TAG, String.format("start-telemetry threadId=%d", Thread.currentThread().getId()));
@@ -71,7 +88,53 @@ public class TeleOps {
                         }
 
                         try {
+                            //start
+                            long lTelemetryStartTime = System.nanoTime();
                             ArrayList<String> data = that.telemetry.getLive();
+                            //end
+                            long lTelemetryEndTime = System.nanoTime();
+
+                            //time elapsed
+                            long telemetryGetheringTime = lTelemetryEndTime - lTelemetryStartTime;
+
+
+                            long lTelemetryTcpStartTime = System.nanoTime();
+                            for (String packet : data) {
+                                that.out.write(packet.getBytes());
+                            }
+                            long lTelemetryTcpEndTime = System.nanoTime();
+                            //time elapsed
+                            long telemetryTcpRunningTime = lTelemetryTcpEndTime - lTelemetryTcpStartTime;
+
+                            Log.d(TAG, String.format("Telemetry running time. Telemetry gathering: %d. Telemetry TCP: %d.", telemetryGetheringTime/1000000, telemetryTcpRunningTime/1000000));
+                        } catch(Exception e) {
+                            Log.e(TAG, "Exception sending", e);
+                        }
+                    }
+                };
+                that.telemetryHighFreqTimer.schedule(that.telemetryHighFreqTask, lowCadence, lowCadence);
+
+                /*
+                int highCadence = lowestCadence * 50;
+                that.telemetryLowFreqTimer = new Timer();
+                that.telemetryLowFreqTask = new TimerTask() {
+                    @Override
+                    public void run() {
+                        // Log.d(TAG, String.format("start-telemetry threadId=%d", Thread.currentThread().getId()));
+
+                        synchronized (that) {
+                            if (that.stopped) {
+                                Log.d(TAG, "start-telemetry TeleOps has been stopped");
+                                return;
+                            }
+                            if (that.socket.isOutputShutdown()) {
+                                Log.d(TAG, "start-telemetry socket closed");
+                                return;
+                            }
+                        }
+
+                        try {
+                            ArrayList<String> data = that.telemetry.getLiveLowFrequency();
                             for (String packet : data) {
                                 that.out.write(packet.getBytes());
                             }
@@ -80,7 +143,7 @@ public class TeleOps {
                         }
                     }
                 };
-                that.telemetryTimer.schedule(that.telemetryTask, cadence, cadence);
+                that.telemetryLowFreqTimer.schedule(that.telemetryLowFreqTask, highCadence, highCadence);*/
 
                 that.operationsThread = new Thread() {
                     @Override
@@ -183,9 +246,14 @@ public class TeleOps {
 
         stopped = true;
         try {
-            if (telemetryTimer != null) {
-                telemetryTimer.cancel();
+            if (telemetryHighFreqTimer != null) {
+                telemetryHighFreqTimer.cancel();
             }
+
+            if (telemetryLowFreqTimer != null) {
+                telemetryLowFreqTimer.cancel();
+            }
+
             if (socket != null) {
                 socket.close();
             }
@@ -196,8 +264,13 @@ public class TeleOps {
         socket = null;
         out = null;
         in  = null;
-        telemetryTimer = null;
-        telemetryTask = null;
+
+        telemetryHighFreqTimer = null;
+        telemetryLowFreqTimer = null;
+
+        telemetryHighFreqTask = null;
+        telemetryLowFreqTask = null;
+
         operationsThread = null;
     }
 }
