@@ -24,7 +24,7 @@ Be sure to edit the ```MainActivity.java``` file and set the ```connString``` ne
 
 GStreamer is a pipeline-based multimedia framework that links together a wide variety of media processing systems to complete complex workflows. For instance, GStreamer can be used to build a system that reads files in one format, processes them, and exports them in another. The formats and processes can be changed in a plug and play fashion.
 
-We use GStreamer with WebRTC to steam the video to the ROCOS platform. The repo build depends on the GStreamer lib. Please follow the instrcutions below to setup the development environment.
+We use GStreamer with WebRTC to steam the video to the web platform. The repo build depends on the GStreamer lib. Please follow the instrcutions below to setup the development environment.
 
 - Download the pre-build binaries from the link [here](https://gstreamer.freedesktop.org/data/pkg/android/1.16.1/gstreamer-1.0-android-universal-1.16.1.tar.xz).
 - Unzip the file and copy the folder `gstreamer-1.0-android-universal-1.16.1` to `vendors` folder under the project root directory.
