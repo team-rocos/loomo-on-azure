@@ -47,18 +47,12 @@ import com.segway.robot.sdk.vision.Vision;
 import com.segway.robot.sdk.voice.Recognizer;
 import com.segway.robot.sdk.voice.Speaker;
 
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.Timer;
 import java.util.TimerTask;
-
-import static com.segway.robot.sdk.base.action.RobotAction.PowerEvent.BATTERY_CHANGED;
 
 public class MainActivity
         extends AppCompatActivity
@@ -254,11 +248,11 @@ public class MainActivity
 
         if (currentAction == null) {
             if (isBindBase && isBindHead && isBindRecognizer && isBindSensor && isBindSpeaker && isBindVision) {
-                robotEmoji.init(this);
+                /*robotEmoji.init(this);
                 robotEmoji.setEmojiView(emojiView);
                 robotEmoji.setBaseControlHandler(this);
                 robotEmoji.setHeadControlHandler(this);
-
+*/
                 robotConversation.start();
                 actionSay("All services initialized.");
                 //RobotAction ra = RobotAction.getTrack(Robot.TRACK_BEHAVIOR_WATCH);
