@@ -29,6 +29,8 @@ We use GStreamer with WebRTC to steam the video to the web platform. The repo bu
 - Download the pre-build binaries from the link [here](https://gstreamer.freedesktop.org/data/pkg/android/1.16.1/gstreamer-1.0-android-universal-1.16.1.tar.xz).
 - Unzip the file and copy the folder `gstreamer-1.0-android-universal-1.16.1` to `vendors` folder under the project root directory.
 
+GSTWebRTC tutorial: https://github.com/centricular/gstwebrtc-demos
+
 ## Telemetry
 
 Loomo sends the following telemetry data to the cloud
