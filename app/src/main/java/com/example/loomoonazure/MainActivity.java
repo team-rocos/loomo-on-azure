@@ -7,10 +7,14 @@ import androidx.core.content.ContextCompat;
 
 import android.Manifest;
 import android.app.ActivityManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.location.Location;
+import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
@@ -26,6 +30,7 @@ import com.example.loomoonazure.util.Robot;
 import com.example.loomoonazure.util.RobotAction;
 import com.example.loomoonazure.util.RobotConversation;
 import com.example.loomoonazure.util.RobotTracking;
+import com.example.loomoonazure.util.SystemMetrics;
 import com.example.loomoonazure.util.TeleOps;
 import com.example.loomoonazure.util.Telemetry;
 import com.segway.robot.sdk.emoji.BaseControlHandler;
@@ -39,15 +44,21 @@ import com.segway.robot.sdk.locomotion.head.Head;
 import com.segway.robot.sdk.locomotion.sbv.Base;
 import com.segway.robot.sdk.perception.sensor.Sensor;
 import com.segway.robot.sdk.vision.Vision;
-import com.segway.robot.sdk.vision.frame.Frame;
-import com.segway.robot.sdk.vision.stream.StreamType;
 import com.segway.robot.sdk.voice.Recognizer;
 import com.segway.robot.sdk.voice.Speaker;
+
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.Timer;
+import java.util.TimerTask;
+
+import static com.segway.robot.sdk.base.action.RobotAction.PowerEvent.BATTERY_CHANGED;
 
 public class MainActivity
         extends AppCompatActivity
@@ -107,6 +118,7 @@ public class MainActivity
     private static final int ACTION_BEHAVE = 18;
     private static final int ACTION_MOVE = 19;
     private static final int ACTION_LOOK = 20;
+    private static final int ACTION_HEAD = 21;
 
     private RobotConversation robotConversation;
     private RobotTracking robotTracking;
@@ -124,6 +136,10 @@ public class MainActivity
     private boolean debug = true;
 
     private boolean intro = false;
+
+    private SystemMetrics systemMetrics = new SystemMetrics();
+    private Timer systemMetricsMonitoringTimer;
+    private TimerTask systemMetricsMonitoringTask;
 
     RobotAction currentAction = null;
     RobotAction resumeAction = null;
@@ -168,7 +184,9 @@ public class MainActivity
         //connection.connect(connString, isIoTCentral);
 
         teleops = new TeleOps(handler, CONNECTION_OPEN, CONNECTION_CLOSED,this, telemetry);
-        teleops.start(rocosAddress, rocosPort, cadence );
+        teleops.start(rocosAddress, rocosPort);
+
+        initSystemMonitoring();
     }
 
     @Override
@@ -199,6 +217,7 @@ public class MainActivity
         Log.d(TAG, String.format("onDestroy threadId=%d", Thread.currentThread().getId()));
 
         telemetry.unregisterEvents(this);
+        teleops.stop();
 
         isConnected = false;
         timeout = 0;
@@ -214,6 +233,19 @@ public class MainActivity
         robotSensor.unbindService();
         robotSpeaker.unbindService();
         robotVision.unbindService();
+
+        try {
+            if (systemMetricsMonitoringTimer != null) {
+                systemMetricsMonitoringTimer.cancel();
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "Exception closing", e);
+        }
+
+        systemMetricsMonitoringTimer = null;
+        systemMetricsMonitoringTask = null;
+
     }
 
     private void initRobot() {
@@ -228,23 +260,9 @@ public class MainActivity
                 robotEmoji.setHeadControlHandler(this);
 
                 robotConversation.start();
+                actionSay("All services initialized.");
                 //RobotAction ra = RobotAction.getTrack(Robot.TRACK_BEHAVIOR_WATCH);
                 //actionDo(ra);
-            }
-
-            if(isBindVision) {
-
-                Vision mVision = Vision.getInstance();
-                //mVision.bindService(this, mBindStateListener);
-
-                Bitmap mBitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
-
-                mVision.startListenFrame(StreamType.DEPTH, new Vision.FrameListener() {
-                    @Override
-                    public void onNewFrame(int streamType, Frame frame) {
-                        mBitmap.copyPixelsFromBuffer(frame.getByteBuffer());
-                    }
-                });
             }
         }
 
@@ -259,8 +277,91 @@ public class MainActivity
         }
     }
 
+    private void initSystemMonitoring() {
+
+        Log.d(TAG, String.format("start threadId=%d", Thread.currentThread().getId()));
+
+        MainActivity that = this;
+
+        // Battery value changing is happening at Telemetry message broadcast receiver
 
 
+        new Thread() {
+
+            private synchronized double getMemoryRate() {
+                // Memory rate
+                ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+                ActivityManager activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                activityManager.getMemoryInfo(mi);
+
+                //Percentage can be calculated for API 16+
+                return mi.availMem / (double) mi.totalMem * 100.0;
+            }
+
+            private synchronized int getCPURate() {
+                StringBuilder tv = new StringBuilder();
+                int rate = 0;
+
+                try {
+                    String Result;
+                    Process p;
+                    p = Runtime.getRuntime().exec("top -n 1");
+
+                    BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
+                    while ((Result = br.readLine()) != null) {
+                        if (Result.trim().length() < 1) {
+                            continue;
+                        } else {
+                            String[] CPUusr = Result.split("%");
+                            tv.append("USER:" + CPUusr[0] + "\n");
+                            String[] CPUusage = CPUusr[0].split("User");
+                            String[] SYSusage = CPUusr[1].split("System");
+                            tv.append("CPU:" + CPUusage[1].trim() + " length:" + CPUusage[1].trim().length() + "\n");
+                            tv.append("SYS:" + SYSusage[1].trim() + " length:" + SYSusage[1].trim().length() + "\n");
+
+                            rate = Integer.parseInt(CPUusage[1].trim()) + Integer.parseInt(SYSusage[1].trim());
+                            break;
+                        }
+                    }
+
+                } catch (IOException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+
+                return rate;
+            }
+
+            @Override
+            public void run() {
+                that.systemMetricsMonitoringTimer = new Timer();
+                that.systemMetricsMonitoringTask = new TimerTask() {
+                    long lastRunAt = 0;
+
+                    @Override
+                    public void run() {
+                        Log.d(TAG, String.format("start-system metrics monitoring threadId=%d", Thread.currentThread().getId()));
+
+                        try {
+                            that.systemMetrics.cpuRate = getCPURate();
+                            that.systemMetrics.memoryRate = getMemoryRate();
+                        } catch (Exception e) {
+                            Log.e(TAG, "Exception sending", e);
+                        }
+                    }
+                };
+                that.systemMetricsMonitoringTimer.schedule(that.systemMetricsMonitoringTask, 0, 1000);
+            }
+        }.run();
+    }
+
+
+
+    // Check if the vision bound
+    @Override
+    public boolean isBindVision() {
+        return this.isBindVision;
+    }
 
     // Handler.Callback
     @Override
@@ -270,7 +371,7 @@ public class MainActivity
             case SERVICE_BIND_BASE:
                 Log.d(TAG, String.format("handleMessage what=SERVICE_BIND_BASE threadId=%d", tid));
                 isBindBase = true;
-                actionSay("Propulsion systems initialized.");
+                //actionSay("Propulsion systems initialized.");
                 initRobot();
                 break;
             case SERVICE_UNBIND_BASE:
@@ -280,7 +381,7 @@ public class MainActivity
             case SERVICE_BIND_HEAD:
                 Log.d(TAG, String.format("handleMessage what=SERVICE_BIND_HEAD threadId=%d", tid));
                 isBindHead = true;
-                actionSay("Degrees of freedom, check!");
+                //actionSay("Degrees of freedom, check!");
                 initRobot();
                 break;
             case SERVICE_UNBIND_HEAD:
@@ -289,7 +390,7 @@ public class MainActivity
                 break;
             case SERVICE_BIND_RECOGNIZER:
                 Log.d(TAG, String.format("handleMessage what=SERVICE_BIND_RECOGNIZER threadId=%d", tid));
-                actionSay("Auditory systems initialized.");
+                //actionSay("Auditory systems initialized.");
                 isBindRecognizer = true;
                 initRobot();
                 break;
@@ -299,7 +400,7 @@ public class MainActivity
                 break;
             case SERVICE_BIND_SENSOR:
                 Log.d(TAG, String.format("handleMessage what=SERVICE_BIND_SENSOR threadId=%d", tid));
-                actionSay("Feelings, check!");
+                //actionSay("Feelings, check!");
                 isBindSensor = true;
                 initRobot();
                 break;
@@ -309,7 +410,7 @@ public class MainActivity
                 break;
             case SERVICE_BIND_SPEAKER:
                 Log.d(TAG, String.format("handleMessage what=SERVICE_BIND_SPEAKER threadId=%d", tid));
-                actionSay("Vocalization systems initialized.");
+                //actionSay("Vocalization systems initialized.");
                 isBindSpeaker = true;
                 initRobot();
                 break;
@@ -319,7 +420,7 @@ public class MainActivity
                 break;
             case SERVICE_BIND_VISION:
                 Log.d(TAG, String.format("handleMessage what=SERVICE_BIND_VISION threadId=%d", tid));
-                actionSay("Perception systems initialized.");
+                //actionSay("Perception systems initialized.");
                 isBindVision = true;
                 initRobot();
                 break;
@@ -346,13 +447,13 @@ public class MainActivity
                 break;
             case CONNECTION_OPEN:
                 Log.d(TAG, String.format("handleMessage what=CONNECTION_OPEN threadId=%d", tid));
-                actionSay("Connection to cloud, check!");
+                //actionSay("Connection to cloud, check!");
                 isConnected = true;
                 initRobot();
                 break;
             case CONNECTION_CLOSED:
                 Log.d(TAG, String.format("handleMessage what=CONNECTION_CLOSED threadId=%d", tid));
-                actionSay("Connection to cloud has been lost");
+                //actionSay("Connection to cloud has been lost");
                 isConnected = false;
                 break;
             case ACTION_SEND_TELEMETRY:
@@ -381,6 +482,10 @@ public class MainActivity
             case ACTION_MOVE:
                 Log.d(TAG, String.format("DEBUG handleMessage what=ACTION_MOVE threadId=%d", tid));
                 doNextAction(Robot.ACTION_TYPE_MOVE);
+                break;
+            case ACTION_HEAD:
+                Log.d(TAG, String.format("DEBUG handleMessage what=ACTION_HEAD threadId=%d", tid));
+                doNextAction(Robot.ACTION_TYPE_HEAD);
                 break;
             case ACTION_LOOK:
                 Log.d(TAG, String.format("handleMessage what=ACTION_MOVE threadId=%d", tid));
@@ -615,10 +720,21 @@ public class MainActivity
     }
 
     @Override
-    public synchronized void setState(String state) {
+    public synchronized void setState(String state, String stateData) {
         Log.d(TAG, String.format("setState threadId=%d", Thread.currentThread().getId()));
 
         this.lastState = state;
+
+        switch (state){
+            case "BATTERY_CHANGED":
+                try {
+                    this.systemMetrics.batteryLevel = Integer.parseInt(stateData);
+                }
+                catch (Exception ex) {
+                    Log.e(TAG, String.format("Failed to parse battery rate to integer threadId=%d", Thread.currentThread().getId()));
+                }
+                break;
+        }
         handler.sendEmptyMessage(ACTION_SEND_STATE);
     }
 
@@ -667,56 +783,6 @@ public class MainActivity
     }
 
     @Override
-    public synchronized double getMemoryPercent()
-    {
-        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
-        ActivityManager activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
-        activityManager.getMemoryInfo(mi);
-
-        //Percentage can be calculated for API 16+
-        double percentAvail = mi.availMem / (double)mi.totalMem * 100.0;
-
-        return percentAvail;
-    }
-
-    @Override
-    // TODO: turn this into more efficient algorithm
-    public synchronized int getCPURate()
-    {
-        StringBuilder tv = new StringBuilder();
-        int rate = 0;
-
-        try {
-            String Result;
-            Process p;
-            p = Runtime.getRuntime().exec("top -n 1");
-
-            BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            while ((Result = br.readLine()) != null) {
-                if (Result.trim().length() < 1) {
-                    continue;
-                } else {
-                    String[] CPUusr = Result.split("%");
-                    tv.append("USER:" + CPUusr[0] + "\n");
-                    String[] CPUusage = CPUusr[0].split("User");
-                    String[] SYSusage = CPUusr[1].split("System");
-                    tv.append("CPU:" + CPUusage[1].trim() + " length:" + CPUusage[1].trim().length() + "\n");
-                    tv.append("SYS:" + SYSusage[1].trim() + " length:" + SYSusage[1].trim().length() + "\n");
-
-                    rate = Integer.parseInt(CPUusage[1].trim()) + Integer.parseInt(SYSusage[1].trim());
-                    break;
-                }
-            }
-
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-
-        return rate;
-    }
-
-    @Override
     public void actionSay(String phrase) {
         Log.d(TAG, String.format("actionSay threadId=%d", Thread.currentThread().getId()));
         robotConversation.speak(phrase);
@@ -740,6 +806,7 @@ public class MainActivity
             if (currentAction != null) {
                 int currentActionType = currentAction.getActionType();
                 Log.d(TAG, String.format("DEBUG doNextAction currentActionType=%d threadId=%d", currentActionType, Thread.currentThread().getId()));
+
                 if (currentActionType != Robot.ACTION_TYPE_TRACK) {
                     Log.d(TAG, String.format("DEBUG doNextAction returning threadId=%d", Thread.currentThread().getId()));
                     return;
@@ -802,6 +869,27 @@ public class MainActivity
                 }
                 handler.sendEmptyMessage(ACTION_LOOK);
                 break;
+            case Robot.ACTION_TYPE_HEAD:
+                Log.d(TAG, String.format("DEBUG doNextAction actionType=ACTION_TYPE_HEAD threadId=%d", Thread.currentThread().getId()));
+
+                arg1 = currentAction.getYaw();
+                arg2 = currentAction.getPitch();
+
+                if (nextAction.getBehavior() == Robot.HEAD_BEHAVIOR_MOVE_VELOCITY) {
+                    if (arg1 != Float.NaN || arg2 != Float.NaN) {
+                        Log.d(TAG, String.format("DEBUG doNextAction valid head data threadId=%d", Thread.currentThread().getId()));
+
+                        if (arg1 != Float.NaN) {
+                            robotHead.setIncrementalYaw(arg1);
+                        }
+                        if (arg2 != Float.NaN) {
+                            robotHead.setIncrementalPitch(arg2);
+                        }
+                    }
+                }
+
+                handler.sendEmptyMessage(ACTION_HEAD);
+                break;
             case Robot.ACTION_TYPE_MOVE:
                 Log.d(TAG, String.format("DEBUG doNextAction actionType=ACTION_TYPE_MOVE threadId=%d", Thread.currentThread().getId()));
                 arg1 = currentAction.getLinear();
@@ -846,9 +934,19 @@ public class MainActivity
     @Override
     public void establishSocketConnection(String server, int port, int cadence) {
         Log.d(TAG, String.format("establishSocketConnection threadId=%d", Thread.currentThread().getId()));
-        teleops.start(server, port, cadence);
+        teleops.start(server, port);
         if (debug) {
             actionSay("Teleops connection initiated");
         }
+    }
+
+    @Override
+    public Vision getVision() {
+        return this.robotVision;
+    }
+
+    @Override
+    public SystemMetrics getSystemMetrics() {
+        return this.systemMetrics;
     }
 }

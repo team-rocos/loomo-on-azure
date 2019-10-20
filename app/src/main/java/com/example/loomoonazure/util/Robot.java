@@ -2,6 +2,8 @@ package com.example.loomoonazure.util;
 
 import android.location.Location;
 
+import com.segway.robot.sdk.vision.Vision;
+
 public interface Robot {
 
     int EMOTE_BEHAVIOR_RANDOM = -1;
@@ -33,6 +35,8 @@ public interface Robot {
     int MOVEMENT_BEHAVIOR_MOVE_VELOCITY = 1;
     int MOVEMENT_BEHAVIOR_MOVE_TARGET = 2;
 
+    int HEAD_BEHAVIOR_MOVE_VELOCITY = 1;
+
     int LOOK_BEHAVIOR_TARGET = 1;
 
     int TRACK_BEHAVIOR_WATCH = 1;
@@ -42,6 +46,7 @@ public interface Robot {
     int ACTION_TYPE_MOVE = 2;
     int ACTION_TYPE_LOOK = 3;
     int ACTION_TYPE_TRACK = 4;
+    int ACTION_TYPE_HEAD = 5;
 
     String getStatus();
 
@@ -51,14 +56,13 @@ public interface Robot {
     Location getLocation();
     void setLocation(Location location);
     String getState();
-    void setState(String state);
+    void setState(String state, String stateData);
     int getPeopleDetected();
     void setPeopleDetected(int peopleCount);
     boolean getDebug();
     void setDebug(boolean debug);
-
-    double getMemoryPercent();
-    int getCPURate();
+    Vision getVision();
+    SystemMetrics getSystemMetrics();
 
     // higher order functions
     void actionSay(String phrase);
@@ -66,4 +70,5 @@ public interface Robot {
 
     // Other
     void establishSocketConnection(String server, int port, int cadence);
+    boolean isBindVision();
 }

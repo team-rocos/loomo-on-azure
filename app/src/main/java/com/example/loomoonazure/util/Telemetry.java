@@ -1,16 +1,16 @@
 package com.example.loomoonazure.util;
 
+
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
-import android.os.BatteryManager;
 import android.os.Bundle;
 import android.util.Log;
-
 import com.segway.robot.algo.Pose2D;
 import com.segway.robot.algo.PoseVLS;
 import com.segway.robot.algo.tf.AlgoTfData;
@@ -26,10 +26,16 @@ import com.segway.robot.sdk.locomotion.sbv.LinearVelocity;
 import com.segway.robot.sdk.perception.sensor.InfraredData;
 import com.segway.robot.sdk.perception.sensor.RobotAllSensors;
 import com.segway.robot.sdk.perception.sensor.Sensor;
-import com.segway.robot.sdk.perception.sensor.UltrasonicData;
+import com.segway.robot.sdk.vision.Vision;
+import com.segway.robot.sdk.vision.frame.Frame;
+import com.segway.robot.sdk.vision.stream.StreamType;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.LinkedList;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class Telemetry extends BroadcastReceiver implements LocationListener {
     private static final String TAG = "Telemetry";
@@ -58,11 +64,18 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
     private Base robotBase;
     private Head robotHead;
     private Sensor robotSensor;
-    private int batteryLevel;
+
+    private ReadWriteLock lock = new ReentrantReadWriteLock();
+
+    private Bitmap videoImage = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888);
+
+    private String videoImageBase64 = "";
+    private long videoCapturedAt = 0;
+    private Lock videoCaptureWriteLock = lock.writeLock();
 
     private LocationManager locationManager;
 
-    private BroadcastReceiver batteryLevelReceiver;
+    private Thread videoPullingThread;
 
     private void populateBase(JsonObject telemetry)
     {
@@ -289,23 +302,6 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
             Log.e(TAG, "Exception locating", e);
         }
 
-        Telemetry that = this;
-
-        batteryLevelReceiver = new BroadcastReceiver() {
-            public void onReceive(Context context, Intent intent) {
-                context.unregisterReceiver(this);
-                int rawlevel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-                int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-                int level = -1;
-                if (rawlevel >= 0 && scale > 0) {
-                    level = (rawlevel * 100) / scale;
-                }
-                that.batteryLevel = level;
-            }
-        };
-
-        IntentFilter batteryLevelFilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
-        context.getApplicationContext().registerReceiver(batteryLevelReceiver, batteryLevelFilter);
     }
 
     public void unregisterEvents(Context context) {
@@ -348,6 +344,85 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
         state.addProperty("type", "location_change");
         state.add("location", location);
         return state.toString();
+    }
+
+    // Start pulling video image with milliseconds apart
+    public void startPullingVideoImage(int cadence) {
+        Telemetry that = this;
+
+        this.videoPullingThread = new Thread() {
+            @Override
+            public void run() {
+                try {
+                    while (true) {
+                        if (robot.isBindVision()) {
+                            break;
+                        }
+
+                        // Wait if the vision hasn't been bound yet
+                        Thread.sleep(1000);
+                    }
+
+                    Vision mVision = robot.getVision();
+                    Bitmap frameImage = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+
+                    mVision.startListenFrame(StreamType.COLOR, new Vision.FrameListener() {
+                        @Override
+                        public void onNewFrame(int streamType, Frame frame) {
+                            long currentTime = System.currentTimeMillis();
+                            try {
+                                videoCaptureWriteLock.lock();
+
+                                if (currentTime - cadence > videoCapturedAt) {
+
+                                    ByteBuffer buffer = frame.getByteBuffer();
+                                    buffer.position(0);
+                                    buffer.rewind();
+                                    frameImage.copyPixelsFromBuffer(buffer);
+
+                                    that.videoImage = Bitmap.createScaledBitmap(frameImage, 320, 240, false);
+
+                                    ByteArrayOutputStream stream = new ByteArrayOutputStream();
+                                    videoImage.compress(Bitmap.CompressFormat.JPEG, 50, stream);
+
+                                    that.videoImageBase64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.DEFAULT)
+                                            .trim()
+                                            .replaceAll("\n", "");
+
+                                    videoCapturedAt = currentTime;
+                                }
+                            } finally {
+                                videoCaptureWriteLock.unlock();
+                            }
+                        }
+                    });
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Exception receiving", e);
+                }
+            }
+        };
+        this.videoPullingThread.start();
+    }
+
+    public ArrayList<String> getVideoImage() {
+        ArrayList<String> results = new ArrayList<String>();
+
+        if (robotSensor.isBind()) {
+            JsonObject envelope;
+            JsonObject payload;
+
+            payload = new JsonObject();
+            //payload.addProperty("cpu", robot.getCPURate());
+            payload.addProperty("base64", this.videoImageBase64);
+
+            envelope = new JsonObject();
+            envelope.addProperty("source", "/loomo/video");
+            envelope.add("payload", payload);
+
+            results.add(envelope.toString());
+        }
+        return results;
     }
 
     public ArrayList<String> getLive() {
@@ -396,10 +471,11 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
 
             results.add(envelope.toString());
 
+            SystemMetrics systemMetrics = robot.getSystemMetrics();
             payload = new JsonObject();
-            //payload.addProperty("cpu", robot.getCPURate());
-            payload.addProperty("memory", robot.getMemoryPercent());
-            payload.addProperty("battery", batteryLevel);
+            payload.addProperty("cpu", systemMetrics.cpuRate);
+            payload.addProperty("memory", systemMetrics.memoryRate);
+            payload.addProperty("battery", systemMetrics.batteryLevel);
 
             envelope = new JsonObject();
             envelope.addProperty("source", "/loomo/system");
@@ -414,6 +490,14 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
+        String stateData = "";
+
+        Bundle bundle = intent.getExtras();
+        if (bundle != null) {
+            for (String key : bundle.keySet()) {
+                Log.e(TAG, key + " : " + (bundle.get(key) != null ? bundle.get(key) : "NULL"));
+            }
+        }
 
         if (action == null) {
             return;
@@ -424,6 +508,7 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
         switch (action) {
             case BATTERY_CHANGED:
                 state = "BATTERY_CHANGED";
+                stateData = String.valueOf(intent.getIntExtra("com.segway.robot.extra.CURRENT_POWER", -1));
                 break;
             case POWER_DOWN:
                 state = "POWER_DOWN";
@@ -484,7 +569,7 @@ public class Telemetry extends BroadcastReceiver implements LocationListener {
                 return;
         }
         Log.d(TAG, String.format("onReceive action=%s threadId=%d", state, tid));
-        robot.setState(state);
+        robot.setState(state, stateData);
     }
 
     // LocationListener

@@ -22,6 +22,10 @@ public class RobotAction {
         return new RobotAction(Robot.ACTION_TYPE_MOVE, movementBehavior, linear, angular);
     }
 
+    public static RobotAction getHead(int headBehavior, float yawVelocity, float pitchVelocity) {
+        return new RobotAction(Robot.ACTION_TYPE_HEAD, headBehavior, yawVelocity, pitchVelocity);
+    }
+
     public static RobotAction getLook(float yaw, float pitch) {
         return new RobotAction(Robot.ACTION_TYPE_LOOK, Robot.LOOK_BEHAVIOR_TARGET, yaw, pitch);
     }
@@ -53,14 +57,14 @@ public class RobotAction {
     }
 
     public float getYaw() {
-        if (actionType == Robot.ACTION_TYPE_LOOK) {
+        if (actionType == Robot.ACTION_TYPE_LOOK || actionType == Robot.ACTION_TYPE_HEAD) {
             return arg1;
         }
         return 0;
     }
 
     public float getPitch() {
-        if (actionType == Robot.ACTION_TYPE_LOOK) {
+        if (actionType == Robot.ACTION_TYPE_LOOK || actionType == Robot.ACTION_TYPE_HEAD) {
             return arg2;
         }
         return 0;
