@@ -11,3 +11,4 @@
 /build
 /captures
 .externalNativeBuild
+/vendors/gstreamer-1.0-android-universal-1.16.1
