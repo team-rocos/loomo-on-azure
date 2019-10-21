@@ -64,7 +64,7 @@ public class MainActivity
     private static final int SERVICE_BIND_BASE = 1;
     private static final int SERVICE_UNBIND_BASE = 2;
 
-    private static final String rocosAddress = "40.125.67.251";
+    private static final String rocosAddress = "139.217.218.58";
     private static final int rocosPort = 9000;
 
     private Head robotHead;
